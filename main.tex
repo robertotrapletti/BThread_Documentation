@@ -8,6 +8,7 @@
 \usepackage{mathtools}
 \usepackage[export]{adjustbox}
 \geometry{a4paper, margin=1in}
+\setlength\parindent{0pt}
 
 %----------------------------------------------------------------
 %Definizione comandi
@@ -40,7 +41,8 @@
 
 %Code listing style named "mystyle"
 \lstdefinestyle{mystyle}{
-  backgroundcolor=\color{backcolour},   commentstyle=\color{codegreen},
+  backgroundcolor=\color{backcolour},   
+  commentstyle=\color{codegreen},
   keywordstyle=\color{RedOrange},
   numberstyle=\tiny\color{codegray},
   stringstyle=\color{codepurple},
@@ -206,7 +208,6 @@ void* tqueue_pop(TQueue* q)
 \end{lstlisting}
 
 \newpage
-\noindent
 Il metodo tqueue\_at\_offset è stato pensato per chiamare un determinato thread tramite posizione nella coda:
 
 \begin{lstlisting}[language=C]
@@ -239,7 +240,7 @@ typedef struct {
     unsigned int priority;
 } __bthread_private;
 \end{lstlisting}
-\noindent Questa è la struttura usata per rappresentare un thread.
+Questa è la struttura usata per rappresentare un thread.
 
 \begin{lstlisting}[language=C]
 __bthread_private *  thread = (__bthread_private* )malloc(sizeof(__bthread_private));
@@ -257,7 +258,7 @@ __bthread_private *  thread = (__bthread_private* )malloc(sizeof(__bthread_priva
     scheduler->current_item = scheduler->queue;
 \end{lstlisting}
 
-\noindent Questo metodo crea un nuovo thread e lo aggiunge alla coda. Il thread id corrisponde alla posizione nella coda. Chiaramente il thread non parte chiamando questa funzione. I thread creati sono nello stato BTHREAD\_UNINITIALIZED. Ad ogni thread è assegnata una priorità che verrà utilizzata dallo scheduler per la scelta del prossimo thread da eseguire.
+Questo metodo crea un nuovo thread e lo aggiunge alla coda. Il thread id corrisponde alla posizione nella coda. Chiaramente il thread non parte chiamando questa funzione. I thread creati sono nello stato BTHREAD\_UNINITIALIZED. Ad ogni thread è assegnata una priorità che verrà utilizzata dallo scheduler per la scelta del prossimo thread da eseguire.
 
 \begin{lstlisting}[language=C]
 void bthread_yield() {
@@ -273,11 +274,12 @@ void bthread_yield() {
 }
 \end{lstlisting}
 
-\noindent  Salva il contesto del thread corrente e richiama la funzione \textit{bthread\_initialize\_next()} la quale controlla se il thread che segue nella coda è inizializzato. Se non lo è, richiama \textit{ bthread\_create\_cushion(nextThread)} che crea un cuscino di memoria per evitare di sovrascrivere 
+Salva il contesto del thread corrente e richiama la funzione \textit{bthread\_initialize\_next()} la quale controlla se il thread che segue nella coda è inizializzato. Se non lo è, richiama \textit{ bthread\_create\_cushion(nextThread)} che crea un cuscino di memoria per evitare di sovrascrivere 
 parte dello stack e quindi di comprometterlo. Per salvare il contesto utilizziamo \textit{sigsetjmp} in modo da poter salvare e ripristinare la maschera dei segnali e implementare quindi la preemption.
 
 \begin{lstlisting}[language=C]
-bthread_block_timer_signal();
+int bthread_join(bthread_t bthread, void **retval) {
+    bthread_block_timer_signal();
     bthread_setup_timer();
     volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
     if (save_context(scheduler->context) == 0) {
@@ -301,22 +303,130 @@ bthread_block_timer_signal();
         } while (tp->state != __BTHREAD_READY);
         restore_context(tp->context);
     }
+}
 \end{lstlisting}
 
-In questa libreria didattica la nostra implementazione è limitata perché permette solamente thread che sfruttano il sistema di join
+In questa libreria didattica la nostra implementazione è limitata perché permette solamente thread che sfruttano il sistema di join e vuol dire che bisogna eseguire il join per ogni thread creato. Si occupa anche di chiamare la funzione per controllare se un thread è nello stato zombie. Di seguito è riportato il relativo metodo:
 
+\begin{lstlisting}[language=C]
+static int bthread_reap_if_zombie(bthread_t bthread, void **retval){
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    __bthread_private * thread = tqueue_get_data(scheduler->current_item);
+    if(thread->state == __BTHREAD_ZOMBIE){
+        thread->state = __BTHREAD_EXITED;
+        if(retval != NULL){
+            *retval = thread->retval;
+        }
+        return 1;
+    }else{
+        return 0;
+    }
+
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=C]
+int bthread_cancel(bthread_t bthread) {
+    volatile __bthread_scheduler_private *scheduler = bthread_get_scheduler();
+    volatile TQueue th = tqueue_at_offset(scheduler->queue, bthread);
+    volatile __bthread_private *threadToTerminate = tqueue_get_data(th);
+    threadToTerminate->cancel_req = 1;
+}
+\end{lstlisting}
+
+Metodo per richiedere la cancellazione di un altro thread. Per simulare questo comportamento, una flag del thread che riceverà la richiesta di cancellazione è settata a 1.
+
+\begin{lstlisting}[language=C]
+void bthread_testcancel(void){
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    __bthread_private * thread = tqueue_get_data(scheduler->current_item);
+    if(thread->cancel_req == 1){
+        bthread_exit(-1);
+    }
+}
+\end{lstlisting}
+
+Questo metodo deve essere inserito nella routine del thread laddove vi è la possibilità di terminare quest'ultimo senza problemi. Il thread può richiamare questa funzione quando ritiene opportuno. Se al momento del controllo la flag è settata, il thread esce restituendo come valore di ritorno -1.
+
+\begin{lstlisting}[language=C]
+void bthread_sleep (double ms) {
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    __bthread_private * thread = tqueue_get_data(scheduler->current_item);
+    thread->state = __BTHREAD_SLEEPING;
+    thread->wake_up_time = ms+get_current_time_millis();
+    bthread_yield();
+}
+\end{lstlisting}
+
+Metodo per mettere il thread corrente in stato di pausa. Setta lo stato e chiama la funzione di yeld.
+
+\begin{lstlisting}[language=C]
+void bthread_printf(const char* format, ...){
+    bthread_block_timer_signal();
+    va_list args;
+    va_start (args, format);
+    vprintf (format, args);
+    va_end (args);
+    bthread_unblock_timer_signal();
+}
+\end{lstlisting}
+
+Questa implementazione async-safe del printf permette di evitare dei deadlock quando si utilizza la console con più thread.
+\vspace{2mm}
+%----------------------------------------------------------------
+\subsection{Implementazione Timer}
+\vspace{2mm}
+
+\begin{lstlisting}[language=C]
+static void bthread_setup_timer() {
+    static bool initialized = false;
+    if (!initialized) {
+        signal(SIGVTALRM, (void (*)()) bthread_yield);
+        struct itimerval time;
+        time.it_interval.tv_sec = 0;
+        time.it_interval.tv_usec = QUANTUM_USEC;
+        time.it_value.tv_sec = 0;
+        time.it_value.tv_usec = QUANTUM_USEC;
+        initialized = true;
+        setitimer(ITIMER_VIRTUAL, &time, NULL);   ///se non funziona usare ITIMER_REAL
+    }
+}
+\end{lstlisting}
+
+
+\begin{lstlisting}[language=C]
+void bthread_block_timer_signal(){
+    sigset_t x;
+    sigemptyset(&x);
+    sigaddset(&x, SIGVTALRM);
+    sigprocmask(SIG_BLOCK, &x, NULL);
+}
+\end{lstlisting}[language=C]
+
+\begin{lstlisting}
+
+void bthread_unblock_timer_signal(){
+    sigset_t x;
+    sigemptyset(&x);
+    sigaddset(&x, SIGVTALRM);
+    sigprocmask(SIG_UNBLOCK, &x, NULL);
+}
+\end{lstlisting}
+
+\vspace{2mm}
 %----------------------------------------------------------------
 \subsection{Implementazione Scheduler}
 \vspace{2mm}
 \begin{lstlisting}[language=C]
-// Routine round robin
 void roundRobinSchedulerRoutine(){
     volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
     scheduler->current_item = tqueue_at_offset(scheduler->current_item, 1);
 }
 \end{lstlisting}
+
+È stata implementata una policy di scheduling utilizzando l'algoritmo round-robin: viene selezionato un thread alla volta dalla coda per poi essere eseguito. Tutti i processi vengono trattati senza alcuna priorità in modo circolare.
+
 \begin{lstlisting}[language=C]
-// routine random, sceglie a caso dalla coda
 void randomSchedulerRoutine(){
     volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
     volatile __bthread_private * thread;
@@ -329,8 +439,10 @@ void randomSchedulerRoutine(){
     scheduler->current_item = queue;
 }
 \end{lstlisting}
+
+Successivamente, è stato sviluppata una policy di scheduling con un algoritmo random; il thread viene selezionato casualmente dalla coda e viene eseguito.
+
 \begin{lstlisting}[language=C]
-// Usa il valore id di priorità del thread per scegliere il prossimo da eseguire.
 void prioritySchedulerRoutine(){
     volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
     volatile __bthread_private * thread;
@@ -351,6 +463,11 @@ void prioritySchedulerRoutine(){
     scheduler->current_item = queue;
 }
 \end{lstlisting}
+
+La terza implementazione si riferisce al priority scheduling, un algoritmo che, per definire il prossimo thread da eseguire, utilizza il valore id di priorità dello stesso.
+
+\vspace{2mm}
+
 %----------------------------------------------------------------
 \subsection{Implementazione sistemi di sync}
 \vspace{2mm}
@@ -358,6 +475,14 @@ void prioritySchedulerRoutine(){
 %----------------------------------------------------------------
 \subsubsection{Implementazione Conditional}
 \vspace{2mm}
+
+\begin{lstlisting}
+typedef struct {
+TQueue waiting_list;
+} bthread_cond_t;
+\end{lstlisting}
+La condition é composta di una struct \textit{bthread\_cond\_t} che contiene una waiting list, risponsabile per tenere i processi che aspettano per una determinata condizione per essere sbloccati.
+
 \begin{lstlisting}[language=C]
 int bthread_cond_wait(bthread_cond_t* c, bthread_mutex_t* mutex){
     bthread_block_timer_signal();
@@ -388,7 +513,7 @@ int bthread_cond_wait(bthread_cond_t* c, bthread_mutex_t* mutex){
 }
 
 \end{lstlisting}
-\noindent La funzione \textit{bthread\_cond\_wait} é risponsabile per bloccare un processo tramite una "condition variable" e sbloccarlo appena la detta condizione é soddisfatta.
+La funzione \textit{bthread\_cond\_wait} é risponsabile per bloccare un processo tramite una "condition variable" e sbloccarlo appena la detta condizione é soddisfatta.
 
 
 \vspace{2mm}
@@ -396,7 +521,7 @@ int bthread_cond_wait(bthread_cond_t* c, bthread_mutex_t* mutex){
 %----------------------------------------------------------------
 \subsubsection{Implementazione Barrier}
 
-La struttura di una Barrier porta il nome \textit{bthread\_barrier\_t} ed è composta da una coda di Thread in attesa, da un contatore che tiene traccia del numero di thread che hanno raggiunto la barriera ovvero che sono in attesa che gli venga impostato lo stato \textit{\_\_BTHREAD\_READY} quando tutti gli altri thread avranno raggiunto la barriera. Ai thread in attesa viene assegnato lo stato \textit{\_\_BTHREAD\_BLOCKED}.
+La struttura di una Barrier porta il nome \textit{bthread\_barrier\_t} ed è composta da una coda di thread in attesa, da un contatore che tiene traccia del numero di thread che hanno raggiunto la barriera ovvero che sono in attesa che gli venga impostato lo stato \textit{\_\_BTHREAD\_READY} quando tutti gli altri thread avranno raggiunto la barriera. Ai thread in attesa viene assegnato lo stato \textit{\_\_BTHREAD\_BLOCKED}.
 Nella struttura è anche definita la dimensione della barriera stessa, il valore è assegnato in fase di creazione e non può essere cambiata. Le seguenti funzioni sono particolarmente interessanti perchè il funzionamento della barriera è basato su di esse.
 
 \begin{lstlisting}[language=C]
@@ -407,13 +532,15 @@ typedef struct {
 } bthread_barrier_t;
 \end{lstlisting}
 
-\noindent Il metodo \textit{bthread\_barrier\_init} serve ad inizializzare una barriera. Il campo \textit{attr} è definito solo per compatibilità con i pthread dello standard POSIX.
+Il metodo \textit{bthread\_barrier\_init} serve ad inizializzare una barriera. Il campo \textit{attr} è definito solo per compatibilità con i pthread dello standard POSIX.
 
 \begin{lstlisting}[language=C]
 int bthread_barrier_init(bthread_barrier_t* b, const bthread_barrierattr_t* attr, unsigned count);
 \end{lstlisting}
 
-\noindent Il metodo \textit{bthread\_barrier\_wait} è chiamato all'interno del codice che viene eseguito da un thread quando è richiesto che il thread attenda che la barriera sia stata raggiunta da tutti i thread. L'interruzione dell'esecuzione del thrad è garantita perchè all'interno della funzione \textit{wait} lo stato del thread corrente viene imposta a \textit{\_\_BTHREAD\_BLOCKED}. L'esecuzione riprenderà quando la barriera sarà raggiunta da tutti i thread e lo stato degli stessi sarà reimpostato a \textit{\_\_BTHREAD\_READY}.
+Il metodo \textit{bthread\\_barrier\\_wait} è chiamato all'interno del codice che viene eseguito da un thread quando è richiesto che il thread attenda che la barriera sia stata raggiunta da tutti i thread.
+\newline
+L'interruzione dell'esecuzione del thrad è garantita perchè all'interno della funzione \textit{bthread_barrier_wait} lo stato del thread corrente viene imposta a \textit{\_\_BTHREAD\_BLOCKED}. L'esecuzione riprenderà quando la barriera sarà raggiunta da tutti i thread e lo stato degli stessi sarà reimpostato a \textit{\_\_BTHREAD\_READY}.
 
 \begin{lstlisting}[language=C]
 int bthread_barrier_wait(bthread_barrier_t* b);
@@ -423,6 +550,23 @@ int bthread_barrier_wait(bthread_barrier_t* b);
 %----------------------------------------------------------------
 \subsubsection{Implementazione Semaphore}
 \vspace{2mm}
+La struttura di un semaforo porta il nome \textit{bthread_sem_t} ed è composta da una coda di thread in attesa e da un valore intero che determina la possibilità dei thread di accedere ad una determinata risorsa oppure no. Il funzionamento del semaforo è basato proprio sul valore di \textit{value}. Finchè il valore di \textit{value} è maggiore di zero i thread hanno la possibilità di accedere alla risorsa altrimenti il thread è tenuto ad aspettare che un altro thread chiami il metodo \textit{bthread_sem_wait} che serve a decrementare il valore di \textit{value.} Quando un thread accede alla risorsa lo fa tramite la funzione \textit{bthread_sem_post} che incrementa il valore di \textit{value}.
+
+Pshared è definito per compatibilità con i pthread dello standard POSIX.
+\begin{lstlisting}[language=C]
+typedef struct {
+    int value;
+    TQueue waiting_list;
+} bthread_sem_t;
+\end{lstlisting}
+
+\begin{lstlisting}[language=C]
+int bthread_sem_wait(bthread_sem_t* s);
+\end{lstlisting}
+\begin{lstlisting}[language=C]
+int bthread_sem_post(bthread_sem_t* s);
+\end{lstlisting}
+
 
 %================================================================
 
