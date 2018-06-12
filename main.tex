@@ -1,0 +1,488 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{geometry}
+% \usepackage{color}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{listings}
+\usepackage{mathtools}
+\usepackage[export]{adjustbox}
+\geometry{a4paper, margin=1in}
+
+%----------------------------------------------------------------
+%Definizione comandi
+%----------------------------------------------------------------
+\renewcommand{\contentsname}{Indice\vspace{5mm}}
+\newcommand{\pppTitolo}{Progetto Sistemi Operativi: BThread}
+\newcommand{\pppSpace}{\newline\vspace{0.5mm}\newline\noindent}
+
+
+%----------------------------------------------------------------
+%Nice to have
+%----------------------------------------------------------------
+
+%Accenti (lo fa già in automatico)
+% \'a à
+% \'e è
+% \'o ò
+
+%liste
+%\begin{itemize}
+%    \item Percentuale di sconto sull'acquisto di qualcosa
+%\end{itemize}
+%
+
+%New colors defined below
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+%Code listing style named "mystyle"
+\lstdefinestyle{mystyle}{
+  backgroundcolor=\color{backcolour},   commentstyle=\color{codegreen},
+  keywordstyle=\color{RedOrange},
+  numberstyle=\tiny\color{codegray},
+  stringstyle=\color{codepurple},
+  basicstyle=\footnotesize,
+  breakatwhitespace=false,         
+  breaklines=true,                 
+  captionpos=b,                    
+  keepspaces=true,                 
+  numbers=left,                    
+  numbersep=5pt,                  
+  showspaces=false,                
+  showstringspaces=false,
+  showtabs=false,                  
+  tabsize=2
+}
+
+%"mystyle" code listing set
+\lstset{style=mystyle}
+
+%----------------------------------------------------------------
+%MAIN
+%----------------------------------------------------------------
+\begin{document}
+%----------------------------------------------------------------
+%Pagina titolo
+%----------------------------------------------------------------
+ \begin{titlepage} 
+ \title{\line(1,0){250}\\\pppTitolo\\\line(1,0){250}}
+ \thispagestyle{empty}
+ \author{Attilio Baldini, Antonio Daniele Mu, Andrea De Carlo, \\Francesco Bresciani, Maura Clerici, Luciano Moreira, Roberto Trapletti}
+ \date{11 Giugno 2018}
+ \maketitle
+ \vspace{10mm}
+ 
+\clearpage
+\end{titlepage}
+
+%----------------------------------------------------------------
+%Pagina indice
+%----------------------------------------------------------------
+\tableofcontents
+
+\clearpage
+
+%----------------------------------------------------------------
+%Documento
+%----------------------------------------------------------------
+
+%================================================================
+
+\section{Introduzione}
+\vspace{5mm}
+%----------------------------------------------------------------
+\subsection{Descrizione del problema}
+\vspace{2mm}
+
+Durante lo svolgimento del corso, abbiamo appreso le nozioni fondamentali che utilizza il Kernel per gestire la coesistenza tra i processi. Risulta però difficile studiare su una porzione di codice tratta direttamente dall'implementazione di un Kernel.
+\pppSpace
+Questo progetto nasce per colmare questa problematica, dandoci l'occasione di studiare didatticamente alcune componentistiche principali di questo complesso sistema.
+%================================================================
+
+\section{Requisiti}
+\vspace{5mm}
+
+%----------------------------------------------------------------
+\subsection{Requisiti funzionali del progetto}
+\vspace{2mm}
+
+I requisiti funzionali di questo progetto sono quelli di completare la libreria bthread (sotto la fattispecie di pthread) Implementando i vari metodi indicati dalla documentazione fornita.
+
+%----------------------------------------------------------------
+\subsection{Requisiti logici del progetto}
+\vspace{2mm}
+
+I requisiti logici di questo progetto sono i seguenti:
+\begin{itemize}
+    \item Creazione di un processo.
+    \item Associazione di un processo con il thread.
+    \item Gestione corretta della coesistenza tra processi.
+    \item Schedulazione coerente tra i processi.
+    \item Comprensione e test dei componenti fondamentali.
+\end{itemize}
+
+
+%================================================================
+
+\section{Approccio alla soluzione}
+\vspace{5mm}
+%----------------------------------------------------------------
+L'approccio che utilizziamo per affrontare questo progetto è quello di lavorare su una astrazione di livello superiore, creando una libreria livello utente. Questo ci permette di imparare i concetti fondamentali studiati a lezione, senza la complicazione intrinseca del Kernel stesso.
+
+%================================================================
+\newpage
+\section{Implementazione}
+\vspace{5mm}
+
+Abbiamo deciso di inserire i componenti più significativi del codice. 
+
+%----------------------------------------------------------------
+\subsection{Implementazione Queue}
+\vspace{2mm}
+Qui di seguito è riportata l'implementazione della coda che utilizziamo nella libreria. La coda è formata da più nodi contenenti dati e il riferimento al nodo successivo. Quella che nel codice chiamiamo TQueue non è nient'altro che un puntatore al nodo head della coda.
+
+\begin{lstlisting}[language=C]
+#include "tqueue.h"
+
+typedef struct TQueueNode {
+    struct TQueueNode* next;
+    void* data;
+} TQueueNode;
+
+typedef struct TQueueNode* TQueue;
+
+\end{lstlisting}
+
+\noindent L'implementazione della coda per la gestione dei thread prevede i classici metodi enqueue e dequeue (tqueue\_enqueue e tqueue\_pop rispettivamente, troppi ueue...):
+
+\begin{lstlisting}[language=C]
+unsigned long int tqueue_enqueue(TQueue* q, void* data)
+{
+    TQueueNode* new_element = (TQueueNode*) malloc(sizeof(TQueueNode));
+    new_element->data = data;
+    unsigned long int index = 0;
+    if (*q == NULL) {
+        *q = new_element;
+        new_element->next = *q;
+    } else {
+        TQueueNode* head = *q;
+        index = 1;
+        while(head->next != *q) {
+            head = head->next;
+            index++;
+        }
+        head->next = new_element;
+        new_element->next = *q;
+    }
+    return index;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=C]
+void* tqueue_pop(TQueue* q)
+{
+    if (*q == NULL) {
+        return NULL;
+    } else {
+        TQueueNode* old_head = *q;
+        void* ret_val = old_head->data;
+        if (old_head->next == old_head) {
+            *q = NULL;
+        } else {
+            *q = old_head->next;
+            TQueueNode* head = *q;
+            while(head->next != old_head) {
+                head = head->next;
+            }
+            head->next =*q;
+        }
+        free(old_head);
+        return ret_val;
+    }
+}
+\end{lstlisting}
+
+\newpage
+\noindent
+Il metodo tqueue\_at\_offset è stato pensato per chiamare un determinato thread tramite posizione nella coda:
+
+\begin{lstlisting}[language=C]
+TQueue tqueue_at_offset(TQueue q, unsigned long int offset)
+{
+    if (offset < 0 || q == NULL) return NULL;
+    unsigned long int index;
+    TQueueNode* head = q;
+    for(index=0; index < offset; index++) {
+        head = head->next;
+        //if (head == q) return NULL;
+    }
+    return head;
+}
+\end{lstlisting}
+%----------------------------------------------------------------
+\subsection{Implementazione Bthread}
+\vspace{2mm}
+\begin{lstlisting}[language=C]
+typedef struct {
+    bthread_t tid;
+    bthread_routine body;
+    void* arg;
+    bthread_state state;
+    bthread_attr_t attr;
+    jmp_buf context;
+    void* retval;
+    int cancel_req;
+    double wake_up_time;
+    unsigned int priority;
+} __bthread_private;
+\end{lstlisting}
+\noindent Questa è la struttura usata per rappresentare un thread.
+
+\begin{lstlisting}[language=C]
+__bthread_private *  thread = (__bthread_private* )malloc(sizeof(__bthread_private));
+    thread->cancel_req = 0; //Cancellation flag set by zero as default
+    thread->body = start_routine;
+    thread->arg = arg;
+    thread->state = __BTHREAD_UNINITIALIZED;
+    thread->priority = priority;
+    if(attr != NULL){
+        thread->attr = *attr;
+    }
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    thread->tid = tqueue_enqueue(&scheduler->queue, thread);
+    *bthread = thread->tid;
+    scheduler->current_item = scheduler->queue;
+\end{lstlisting}
+
+\noindent Questo metodo crea un nuovo thread e lo aggiunge alla coda. Il thread id corrisponde alla posizione nella coda. Chiaramente il thread non parte chiamando questa funzione. I thread creati sono nello stato BTHREAD\_UNINITIALIZED. Ad ogni thread è assegnata una priorità che verrà utilizzata dallo scheduler per la scelta del prossimo thread da eseguire.
+
+\begin{lstlisting}[language=C]
+void bthread_yield() {
+    bthread_block_timer_signal();
+    volatile __bthread_scheduler_private *scheduler = bthread_get_scheduler();
+    volatile __bthread_private * thread = tqueue_get_data(scheduler->current_item);
+
+    if (!save_context(thread->context)) {
+        bthread_initialize_next();
+        restore_context(scheduler->context);
+    }
+    bthread_unblock_timer_signal();
+}
+\end{lstlisting}
+
+\noindent  Salva il contesto del thread corrente e richiama la funzione \textit{bthread\_initialize\_next()} la quale controlla se il thread che segue nella coda è inizializzato. Se non lo è, richiama \textit{ bthread\_create\_cushion(nextThread)} che crea un cuscino di memoria per evitare di sovrascrivere 
+parte dello stack e quindi di comprometterlo. Per salvare il contesto utilizziamo \textit{sigsetjmp} in modo da poter salvare e ripristinare la maschera dei segnali e implementare quindi la preemption.
+
+\begin{lstlisting}[language=C]
+bthread_block_timer_signal();
+    bthread_setup_timer();
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    if (save_context(scheduler->context) == 0) {
+        bthread_initialize_next();
+        restore_context(scheduler->context);
+    } else {
+        __bthread_private* tp;
+        do {
+            if (bthread_reap_if_zombie(bthread, retval)) return 0;
+
+            scheduler->scheduling_routine();
+
+            tp = (__bthread_private*) tqueue_get_data(scheduler->current_item);
+            volatile __bthread_private * thread = tqueue_get_data(scheduler->current_item);
+            //thread sleep implementation
+            if (thread->state == __BTHREAD_SLEEPING) {
+                if (thread->wake_up_time <= get_current_time_millis()) {
+                    thread->state = __BTHREAD_READY;
+                }
+            }
+        } while (tp->state != __BTHREAD_READY);
+        restore_context(tp->context);
+    }
+\end{lstlisting}
+
+In questa libreria didattica la nostra implementazione è limitata perché permette solamente thread che sfruttano il sistema di join
+
+%----------------------------------------------------------------
+\subsection{Implementazione Scheduler}
+\vspace{2mm}
+\begin{lstlisting}[language=C]
+// Routine round robin
+void roundRobinSchedulerRoutine(){
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    scheduler->current_item = tqueue_at_offset(scheduler->current_item, 1);
+}
+\end{lstlisting}
+\begin{lstlisting}[language=C]
+// routine random, sceglie a caso dalla coda
+void randomSchedulerRoutine(){
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    volatile __bthread_private * thread;
+    TQueue queue;
+    do{
+        int randID=rand()%tqueue_size(scheduler->queue);
+        queue=tqueue_at_offset(scheduler->queue,randID);
+        thread = tqueue_get_data(queue);
+    }while(!thread->state == __BTHREAD_READY);
+    scheduler->current_item = queue;
+}
+\end{lstlisting}
+\begin{lstlisting}[language=C]
+// Usa il valore id di priorità del thread per scegliere il prossimo da eseguire.
+void prioritySchedulerRoutine(){
+    volatile __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    volatile __bthread_private * thread;
+    TQueue queue;
+    unsigned long size = tqueue_size(scheduler->queue);
+    volatile unsigned int priorityLevel = 999;
+    int i;
+    for(i = 0; i < size; i++){
+        TQueue tempQueue = tqueue_at_offset(scheduler->queue, i);
+        thread = tqueue_get_data(tempQueue);
+        if(thread->state != __BTHREAD_EXITED){
+            if(thread->priority < priorityLevel){
+                priorityLevel = thread->priority;
+                queue = tempQueue;
+            }
+        }
+    }
+    scheduler->current_item = queue;
+}
+\end{lstlisting}
+%----------------------------------------------------------------
+\subsection{Implementazione sistemi di sync}
+\vspace{2mm}
+
+%----------------------------------------------------------------
+\subsubsection{Implementazione Conditional}
+\vspace{2mm}
+\begin{lstlisting}[language=C]
+int bthread_cond_wait(bthread_cond_t* c, bthread_mutex_t* mutex){
+    bthread_block_timer_signal();
+
+    __bthread_scheduler_private* scheduler = bthread_get_scheduler();
+    __bthread_private* thread = tqueue_get_data(scheduler->current_item);
+
+    if(mutex->owner == thread){
+        __bthread_private* tempThread = tqueue_pop(&mutex->waiting_list);
+
+        if(tempThread == NULL){
+            mutex->owner = NULL;
+        } else {
+            tempThread->state = __BTHREAD_READY;
+            mutex->owner = tempThread;
+        }
+    }
+
+    thread->state = __BTHREAD_BLOCKED;
+    tqueue_enqueue(&c->waiting_list, thread);
+
+    while(thread->state == __BTHREAD_BLOCKED){
+        bthread_yield();
+    }
+
+    bthread_mutex_lock(mutex);
+    bthread_unblock_timer_signal();
+}
+
+\end{lstlisting}
+\noindent La funzione \textit{bthread\_cond\_wait} é risponsabile per bloccare un processo tramite una "condition variable" e sbloccarlo appena la detta condizione é soddisfatta.
+
+
+\vspace{2mm}
+
+%----------------------------------------------------------------
+\subsubsection{Implementazione Barrier}
+
+La struttura di una Barrier porta il nome \textit{bthread\_barrier\_t} ed è composta da una coda di Thread in attesa, da un contatore che tiene traccia del numero di thread che hanno raggiunto la barriera ovvero che sono in attesa che gli venga impostato lo stato \textit{\_\_BTHREAD\_READY} quando tutti gli altri thread avranno raggiunto la barriera. Ai thread in attesa viene assegnato lo stato \textit{\_\_BTHREAD\_BLOCKED}.
+Nella struttura è anche definita la dimensione della barriera stessa, il valore è assegnato in fase di creazione e non può essere cambiata. Le seguenti funzioni sono particolarmente interessanti perchè il funzionamento della barriera è basato su di esse.
+
+\begin{lstlisting}[language=C]
+typedef struct {
+    TQueue waiting_list;
+    unsigned count;
+    unsigned barrier_size;
+} bthread_barrier_t;
+\end{lstlisting}
+
+\noindent Il metodo \textit{bthread\_barrier\_init} serve ad inizializzare una barriera. Il campo \textit{attr} è definito solo per compatibilità con i pthread dello standard POSIX.
+
+\begin{lstlisting}[language=C]
+int bthread_barrier_init(bthread_barrier_t* b, const bthread_barrierattr_t* attr, unsigned count);
+\end{lstlisting}
+
+\noindent Il metodo \textit{bthread\_barrier\_wait} è chiamato all'interno del codice che viene eseguito da un thread quando è richiesto che il thread attenda che la barriera sia stata raggiunta da tutti i thread. L'interruzione dell'esecuzione del thrad è garantita perchè all'interno della funzione \textit{wait} lo stato del thread corrente viene imposta a \textit{\_\_BTHREAD\_BLOCKED}. L'esecuzione riprenderà quando la barriera sarà raggiunta da tutti i thread e lo stato degli stessi sarà reimpostato a \textit{\_\_BTHREAD\_READY}.
+
+\begin{lstlisting}[language=C]
+int bthread_barrier_wait(bthread_barrier_t* b);
+\end{lstlisting}
+
+
+%----------------------------------------------------------------
+\subsubsection{Implementazione Semaphore}
+\vspace{2mm}
+
+%================================================================
+
+\section{Compilazione e Utilizzo}
+\vspace{5mm}
+
+%----------------------------------------------------------------
+\subsection{Chiamate a funzione da utilizzare}
+\vspace{2mm}
+
+A seguire alcune chiamate a funzione mandatorie per utlizzare questa libreria.
+
+\begin{lstlisting}[language=C]
+// Recupero / creazione dello scheduler
+setScheduler( __SCHEDULER_RANDOM | __SCHEDULER_PRIORITY |  __SCHEDULER_ROUNDROBIN);
+
+// Inizializzazione della barriera
+bthread_barrier_t barrier;
+bthread_barrier_init(&barrier,NULL,2);
+
+// Inizializzazione di Mutex e Condition
+bthread_mutex_init(&stock_mutex, NULL);
+bthread_cond_init(&items_in_stock, NULL);
+bthread_cond_init(&space_in_stock, NULL);
+
+// Inizializzazione del semaphore
+bthread_sem_init(&s, pshared, value);
+
+// Creazione bthread
+bthread_create(&bid1,NULL,thread_barrier,NULL, 1);
+bthread_create(&bid2,NULL,thread_barrier,NULL, 2);
+bthread_create(&bid3,NULL,thread_barrier,NULL, 3);
+bthread_create(&bid4,NULL,thread_barrier,NULL, 4);
+
+// (..) gestione di eventuali wait
+
+// Join dei vari threads
+bthread_join(bid1,NULL);
+bthread_join(bid2,NULL);
+bthread_join(bid3,NULL);
+bthread_join(bid4,NULL);
+
+\end{lstlisting}
+
+%----------------------------------------------------------------
+\subsection{Esempi utilizzati}
+\vspace{2mm}
+
+
+%================================================================
+
+\section{Conclusioni}
+\vspace{5mm}
+%----------------------------------------------------------------
+\subsection{Problemi riscontrati}
+\vspace{2mm}
+
+Durante lo sviluppo del progetto abbiamo riscontrato alcuni problemi di implemetazione. La maggior parte delle volte questi si sono risolti mediante lo studio analitico della funzione 
+%----------------------------------------------------------------
+\subsection{Possibili estensioni}
+\vspace{2mm}
+
+\end{document}
